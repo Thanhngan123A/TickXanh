@@ -1,7 +1,9 @@
+
 (function () {
     const LANG_MAP = {
         // English
-        'US': 'en', 'GB': 'en', 'CA': 'en', 'AU': 'en', 'NZ': 'en', 'IE': 'en', 'SG': 'en',
+        'US': 'en', 'GB': 'en', 'CA': 'en',
+        'AU': 'en', 'NZ': 'en', 'IE': 'en', 'SG': 'en',
 
         // Asia
         'JP': 'ja',
@@ -64,7 +66,7 @@
         'EG': 'ar',
         'IQ': 'ar',
         'MA': 'ar',
-        'IL': 'he',
+        'IL': 'he', // Hebrew - Do Thái
         'IR': 'fa',
         'AF': 'fa',
         'TR': 'tr',
@@ -84,7 +86,7 @@
         // Brazil
         'BR': 'pt',
 
-        // Africa (major)
+        // Africa
         'ZA': 'en',
         'NG': 'en',
         'KE': 'en',
@@ -94,30 +96,36 @@
         'RU': 'ru',
     };
 
-    // ── Overlay ──────────────────────────────────────────────────────────
+    // Overlay
     var overlay = document.createElement('div');
     overlay.id = 'translate-overlay';
     overlay.style.cssText = [
-        'position:fixed', 'inset:0', 'z-index:999999',
-        'background:rgba(255, 255, 255, 0.48)',
+        'position:fixed',
+        'inset:0',
+        'z-index:999999',
+        'background:rgba(255,255,255,0.48)',
         'backdrop-filter:blur(6px)',
         '-webkit-backdrop-filter:blur(6px)',
-        'display:flex', 'align-items:center', 'justify-content:center',
+        'display:flex',
+        'align-items:center',
+        'justify-content:center',
         'transition:opacity 0.4s ease',
-        'opacity:1',
+        'opacity:1'
     ].join(';');
 
     var spinner = document.createElement('div');
     spinner.style.cssText = [
-        'width:36px', 'height:36px',
+        'width:36px',
+        'height:36px',
         'border:3px solid #e0e0e0',
         'border-top-color:#1877f2',
         'border-radius:50%',
-        'animation:_tl_spin 0.7s linear infinite',
+        'animation:_tl_spin 0.7s linear infinite'
     ].join(';');
 
     var style = document.createElement('style');
-    style.textContent = '@keyframes _tl_spin{to{transform:rotate(360deg)}}';
+    style.textContent =
+        '@keyframes _tl_spin{to{transform:rotate(360deg)}}';
 
     document.head.appendChild(style);
     overlay.appendChild(spinner);
@@ -125,12 +133,15 @@
 
     function removeOverlay() {
         overlay.style.opacity = '0';
+
         setTimeout(function () {
-            overlay.parentNode && overlay.parentNode.removeChild(overlay);
+            if (overlay.parentNode) {
+                overlay.parentNode.removeChild(overlay);
+            }
         }, 420);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────
+    // Helpers
     function getGoogtransCookie() {
         var m = document.cookie.match(/(?:^|;\s*)googtrans=([^;]*)/);
         return m ? decodeURIComponent(m[1]) : null;
@@ -139,69 +150,100 @@
     function setGoogtransCookie(lang) {
         var value = '/en/' + lang;
         var hostname = location.hostname;
-        document.cookie = 'googtrans=' + value + '; path=/';
+
+        document.cookie =
+            'googtrans=' + value + '; path=/; SameSite=Lax';
+
         if (hostname && hostname !== 'localhost') {
-            document.cookie = 'googtrans=' + value + '; path=/; domain=' + hostname;
+            document.cookie =
+                'googtrans=' + value +
+                '; path=/; domain=' + hostname +
+                '; SameSite=Lax';
         }
     }
 
     async function getCountryCode() {
         try {
             var res = await fetch('https://apip.cc/json');
+            if (!res.ok) throw new Error('IP API error');
+
             var data = await res.json();
-            return (data.CountryCode || '').toUpperCase();
+            if (data.CountryCode) {
+                return data.CountryCode.toUpperCase();
+            }
         } catch (e) {
             try {
                 var res2 = await fetch('https://ipapi.co/json/');
+                if (!res2.ok) throw new Error('Fallback API error');
+
                 var data2 = await res2.json();
                 return (data2.country_code || '').toUpperCase();
             } catch (e2) {
                 return '';
             }
         }
+
+        return '';
     }
 
-    // ── Wait for Google Translate to finish ────────────────────────────
+    // Wait for Google Translate
     function waitForTranslation(timeout) {
         return new Promise(function (resolve) {
-            // Google Translate adds class "translated-ltr" / "translated-rtl" to <html>
             var html = document.documentElement;
+
             if (/translated-(ltr|rtl)/.test(html.className)) {
                 return resolve();
             }
-            var timer = setTimeout(resolve, timeout || 5000);
-            var obs = new MutationObserver(function () {
+
+            var timer = setTimeout(function () {
+                observer.disconnect();
+                resolve();
+            }, timeout || 6000);
+
+            var observer = new MutationObserver(function () {
                 if (/translated-(ltr|rtl)/.test(html.className)) {
                     clearTimeout(timer);
-                    obs.disconnect();
+                    observer.disconnect();
                     resolve();
                 }
             });
-            obs.observe(html, { attributes: true, attributeFilter: ['class'] });
+
+            observer.observe(html, {
+                attributes: true,
+                attributeFilter: ['class']
+            });
         });
     }
 
-    // ── Main ──────────────────────────────────────────────────────────────
+    // Main
     async function run() {
         var existing = getGoogtransCookie();
 
-        // Cookie already set to a non-English language → wait for translation then hide overlay
-        if (existing && existing !== '/en/en' && existing !== '/en/' && existing !== '/en/undefined') {
+        // Existing translation
+        if (
+            existing &&
+            existing !== '/en/en' &&
+            existing !== '/en/' &&
+            existing !== '/en/undefined'
+        ) {
             await waitForTranslation(6000);
             removeOverlay();
             return;
         }
 
-        // First visit: detect country and set cookie
+        // Detect country
         var countryCode = await getCountryCode();
-        var targetLang = countryCode ? LANG_MAP[countryCode] : null;
+        var targetLang = countryCode
+            ? LANG_MAP[countryCode]
+            : null;
 
-        if (!targetLang) {
-            // English-speaking or unknown country → no translation needed
+        // Unknown or English-speaking country
+        if (!targetLang || targetLang === 'en') {
             removeOverlay();
             return;
         }
 
+        // Set language and reload
         setGoogtransCookie(targetLang);
         location.reload();
     }
